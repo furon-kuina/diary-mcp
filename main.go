@@ -83,29 +83,29 @@ func main() {
 		case "tools/call":
 			if msg.Params == nil {
 				response.Error = ResponseError{
-					Code:    -32602,
-					Message: "Unknown tool: invalid_tool_name",
+					Code:    -32600,
+					Message: "params required",
 				}
 			}
 			params, ok := msg.Params.(map[string]any)
 			if !ok {
 				response.Error = ResponseError{
-					Code:    -32602,
-					Message: "Unknown tool: invalid_tool_name",
+					Code:    -32600,
+					Message: "invalid request",
 				}
 				break
 			}
 			if _, ok := params["name"]; !ok {
 				response.Error = ResponseError{
-					Code:    -32602,
-					Message: "Unknown tool: invalid_tool_name",
+					Code:    -32600,
+					Message: "no method name",
 				}
 				break
 			}
 			if params["name"] != "add" {
 				response.Error = ResponseError{
-					Code:    -32602,
-					Message: "Unknown tool: invalid_tool_name",
+					Code:    -32601,
+					Message: "only add method is supported",
 				}
 				break
 			}
@@ -113,15 +113,18 @@ func main() {
 			if !ok {
 				response.Error = ResponseError{
 					Code:    -32602,
-					Message: "Unknown tool: invalid_arguments",
+					Message: "arguments required",
 				}
 				break
 			}
 			num1, ok1 := arguments["num1"].(float64)
 			num2, ok2 := arguments["num2"].(float64)
 			if !ok1 || !ok2 {
-				fmt.Fprintf(logFile, "[ERROR] invalid arguments: num1 and num2 must be numbers\n")
-				continue
+				response.Error = ResponseError{
+					Code:    -32602,
+					Message: "num1 and num2 is required",
+				}
+				break
 			}
 			sum := num1 + num2
 			response.Result = map[string]any{"content": []map[string]any{
