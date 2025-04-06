@@ -1,44 +1,147 @@
 package main
 
 import (
-	"context"
-	"errors"
+	"bufio"
+	"encoding/json"
 	"fmt"
-
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
+	"os"
 )
 
-func main() {
-	// Create MCP server
-	s := server.NewMCPServer(
-		"Demo 🚀",
-		"1.0.0",
-	)
-
-	// Add tool
-	tool := mcp.NewTool("hello_world",
-		mcp.WithDescription("Say hello to someone"),
-		mcp.WithString("name",
-			mcp.Required(),
-			mcp.Description("Name of the person to greet"),
-		),
-	)
-
-	// Add tool handler
-	s.AddTool(tool, helloHandler)
-
-	// Start the stdio server
-	if err := server.ServeStdio(s); err != nil {
-		fmt.Printf("Server error: %v\n", err)
-	}
+type MCPRequest struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	ID      int    `json:"id"`
+	Params  any    `json:"params,omitempty"`
 }
 
-func helloHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	name, ok := request.Params.Arguments["name"].(string)
-	if !ok {
-		return nil, errors.New("name must be a string")
-	}
+type MCPResponse struct {
+	JSONRPC string        `json:"jsonrpc"`
+	ID      int           `json:"id"`
+	Result  any           `json:"result,omitempty"`
+	Error   ResponseError `json:"error,omitempty,omitzero"`
+}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Hello, %s!", name)), nil
+type ResponseError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    any    `json:"data,omitempty"`
+}
+
+func main() {
+	logFile, err := os.Create("/tmp/diary-mcp.log")
+	if err != nil {
+		panic(err)
+	}
+	defer logFile.Close()
+	sc := bufio.NewScanner(os.Stdin)
+	for sc.Scan() {
+		received := sc.Bytes()
+		fmt.Fprintln(logFile, "[DEBUG] received: ", string(received))
+		var msg MCPRequest
+		err := json.Unmarshal(received, &msg)
+		if err != nil {
+			fmt.Fprintf(logFile, "[ERROR] invalid message: %v\n", err)
+			continue
+		}
+		response := MCPResponse{
+			JSONRPC: "2.0",
+			ID:      msg.ID,
+		}
+		switch msg.Method {
+		case "initialize":
+			response.Result = map[string]any{
+				"capabilities": struct{}{},
+				"serverInfo": map[string]string{
+					"name":    "diary-mcp",
+					"version": "0.0.1",
+				},
+				"protocolVersion": "2024-11-05",
+			}
+		case "notifications/initialized":
+			fmt.Fprintf(logFile, "[DEBUG] initialized!\n")
+		case "tools/list":
+			response.Result = map[string]any{
+				"tools": []map[string]any{
+					{"name": "adder",
+						"description": "Adds two numbers",
+						"inputSchema": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"num1": map[string]any{
+									"type": "number",
+								},
+								"num2": map[string]any{
+									"type": "number",
+								},
+							},
+							"required": []string{"num1", "num2"},
+						},
+					},
+				},
+				"nextCursor": "next-page-cursor",
+			}
+		case "tools/call":
+			if msg.Params == nil {
+				response.Error = ResponseError{
+					Code:    -32602,
+					Message: "Unknown tool: invalid_tool_name",
+				}
+			}
+			params, ok := msg.Params.(map[string]any)
+			if !ok {
+				response.Error = ResponseError{
+					Code:    -32602,
+					Message: "Unknown tool: invalid_tool_name",
+				}
+				break
+			}
+			if _, ok := params["name"]; !ok {
+				response.Error = ResponseError{
+					Code:    -32602,
+					Message: "Unknown tool: invalid_tool_name",
+				}
+				break
+			}
+			if params["name"] != "add" {
+				response.Error = ResponseError{
+					Code:    -32602,
+					Message: "Unknown tool: invalid_tool_name",
+				}
+				break
+			}
+			arguments, ok := params["arguments"].(map[string]any)
+			if !ok {
+				response.Error = ResponseError{
+					Code:    -32602,
+					Message: "Unknown tool: invalid_arguments",
+				}
+				break
+			}
+			num1, ok1 := arguments["num1"].(float64)
+			num2, ok2 := arguments["num2"].(float64)
+			if !ok1 || !ok2 {
+				fmt.Fprintf(logFile, "[ERROR] invalid arguments: num1 and num2 must be numbers\n")
+				continue
+			}
+			sum := num1 + num2
+			response.Result = map[string]any{"content": []map[string]any{
+				{
+					"type": "text",
+					"text": fmt.Sprintf("%f", sum),
+				},
+			}}
+		default:
+			fmt.Fprintf(logFile, "[ERROR] unknown method: %s\n", msg.Method)
+			continue
+		}
+		jsonResponse, err := json.Marshal(response)
+		if err != nil {
+			fmt.Fprintf(logFile, "[ERROR] failed to marshal response: %v\n", err)
+			continue
+		}
+		fmt.Fprintf(logFile, "[DEBUG] sending response: %s\n", string(jsonResponse))
+		if _, err := fmt.Fprintf(os.Stdout, "%s\n", jsonResponse); err != nil {
+			return
+		}
+	}
 }
